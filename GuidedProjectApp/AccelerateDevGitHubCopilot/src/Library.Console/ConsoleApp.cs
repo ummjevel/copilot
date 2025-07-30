@@ -173,30 +173,45 @@ public class ConsoleApp
 
     async Task<ConsoleState> LoanDetails()
     {
-        await Task.CompletedTask;
+        Console.WriteLine($"Book title: {selectedLoanDetails.BookItem!.Book!.Title}");
+        Console.WriteLine($"Book Author: {selectedLoanDetails.BookItem!.Book!.Author!.Name}");
+        Console.WriteLine($"Due date: {selectedLoanDetails.DueDate}");
+        Console.WriteLine($"Returned: {(selectedLoanDetails.ReturnDate != null).ToString()}");
+        Console.WriteLine();
 
-        if (selectedLoanDetails == null) return ConsoleState.PatronSearch;
+        CommonActions options = CommonActions.SearchPatrons | CommonActions.Quit | CommonActions.ReturnLoanedBook | CommonActions.ExtendLoanedBook;
+        CommonActions action = ReadInputOptions(options, out int selectedLoanNumber);
 
-        Console.WriteLine("Loan Details:");
-        Console.WriteLine(selectedLoanDetails);
-
-        CommonActions options = CommonActions.Back | CommonActions.Quit | CommonActions.SearchBooks;
-        CommonActions action = ReadInputOptions(options, out int selectedOptionNumber);
-
-        if (action == CommonActions.Back)
+        if (action == CommonActions.ExtendLoanedBook)
         {
-            return ConsoleState.PatronDetails;
+            var status = await _loanService.ExtendLoan(selectedLoanDetails.Id);
+            Console.WriteLine(EnumHelper.GetDescription(status));
+
+            // reload loan after extending
+            selectedPatronDetails = (await _patronRepository.GetPatron(selectedPatronDetails.Id))!;
+            selectedLoanDetails = (await _loanRepository.GetLoan(selectedLoanDetails.Id))!;
+            return ConsoleState.LoanDetails;
         }
-        else if (action == CommonActions.SearchBooks)
+        else if (action == CommonActions.ReturnLoanedBook)
         {
-            return await SearchBooks();
+            var status = await _loanService.ReturnLoan(selectedLoanDetails.Id);
+
+            Console.WriteLine(EnumHelper.GetDescription(status));
+            _currentState = ConsoleState.LoanDetails;
+            // reload loan after returning
+            selectedLoanDetails = await _loanRepository.GetLoan(selectedLoanDetails.Id);
+            return ConsoleState.LoanDetails;
         }
         else if (action == CommonActions.Quit)
         {
-            Environment.Exit(0);
+            return ConsoleState.Quit;
+        }
+        else if (action == CommonActions.SearchPatrons)
+        {
+            return ConsoleState.PatronSearch;
         }
 
-        return ConsoleState.LoanDetails;
+        throw new InvalidOperationException("An input option is not handled.");
     }
 
     async Task<ConsoleState> SearchBooks()

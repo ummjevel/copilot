@@ -19,13 +19,7 @@ public class ConsoleApp
     IPatronService _patronService;
     private readonly JsonData _jsonData;
 
-    public ConsoleApp(
-        ILoanService loanService,
-        IPatronService patronService,
-        IPatronRepository patronRepository,
-        ILoanRepository loanRepository,
-        JsonData jsonData
-    )
+    public ConsoleApp(ILoanService loanService, IPatronService patronService, IPatronRepository patronRepository, ILoanRepository loanRepository, JsonData jsonData)
     {
         _patronRepository = patronRepository;
         _loanRepository = loanRepository;
@@ -126,40 +120,55 @@ public class ConsoleApp
 
     async Task<ConsoleState> PatronDetails()
     {
-        if (selectedPatronDetails == null) return ConsoleState.PatronSearch;
-
-        Console.WriteLine("Patron Details:");
-        Console.WriteLine(selectedPatronDetails);
-
-        CommonActions options = CommonActions.Back | CommonActions.ViewLoans | CommonActions.Quit | CommonActions.SearchBooks;
-        CommonActions action = ReadInputOptions(options);
-
-        if (action == CommonActions.ViewLoans)
+        Console.WriteLine($"Name: {selectedPatronDetails.Name}");
+        Console.WriteLine($"Membership Expiration: {selectedPatronDetails.MembershipEnd}");
+        Console.WriteLine();
+        Console.WriteLine("Book Loans:");
+        int loanNumber = 1;
+        foreach (Loan loan in selectedPatronDetails.Loans)
         {
-            var loans = await _loanRepository.GetLoansByPatronId(selectedPatronDetails.Id);
-            Console.WriteLine("Loans for this patron:");
-            foreach (var loan in loans)
+            Console.WriteLine($"{loanNumber}) {loan.BookItem!.Book!.Title} - Due: {loan.DueDate} - Returned: {(loan.ReturnDate != null).ToString()}");
+            loanNumber++;
+        }
+
+        CommonActions options = CommonActions.SearchPatrons | CommonActions.Quit | CommonActions.Select | CommonActions.RenewPatronMembership | CommonActions.SearchBooks;
+        CommonActions action = ReadInputOptions(options, out int selectedLoanNumber);
+        if (action == CommonActions.Select)
+        {
+            if (selectedLoanNumber >= 1 && selectedLoanNumber <= selectedPatronDetails.Loans.Count())
             {
-                Console.WriteLine(loan);
+                var selectedLoan = selectedPatronDetails.Loans.ElementAt(selectedLoanNumber - 1);
+                selectedLoanDetails = selectedPatronDetails.Loans.Where(l => l.Id == selectedLoan.Id).Single();
+                return ConsoleState.LoanDetails;
             }
-
-            return ConsoleState.LoanDetails;
-        }
-        else if (action == CommonActions.Back)
-        {
-            return ConsoleState.PatronSearch;
-        }
-        else if (action == CommonActions.SearchBooks)
-        {
-            await SearchBooks();
-            return ConsoleState.PatronDetails;
+            else
+            {
+                Console.WriteLine("Invalid book loan number. Please try again.");
+                return ConsoleState.PatronDetails;
+            }
         }
         else if (action == CommonActions.Quit)
         {
-            Environment.Exit(0);
+            return ConsoleState.Quit;
+        }
+        else if (action == CommonActions.SearchPatrons)
+        {
+            return ConsoleState.PatronSearch;
+        }
+        else if (action == CommonActions.RenewPatronMembership)
+        {
+            var status = await _patronService.RenewMembership(selectedPatronDetails.Id);
+            Console.WriteLine(EnumHelper.GetDescription(status));
+            // reloading after renewing membership
+            selectedPatronDetails = (await _patronRepository.GetPatron(selectedPatronDetails.Id))!;
+            return ConsoleState.PatronDetails;
+        }
+        else if (action == CommonActions.SearchBooks)
+        {
+            return await SearchBooks();
         }
 
-        return ConsoleState.PatronDetails;
+        throw new InvalidOperationException("An input option is not handled.");
     }
 
     async Task<ConsoleState> LoanDetails()
@@ -171,12 +180,16 @@ public class ConsoleApp
         Console.WriteLine("Loan Details:");
         Console.WriteLine(selectedLoanDetails);
 
-        CommonActions options = CommonActions.Back | CommonActions.Quit;
-        CommonActions action = ReadInputOptions(options);
+        CommonActions options = CommonActions.Back | CommonActions.Quit | CommonActions.SearchBooks;
+        CommonActions action = ReadInputOptions(options, out int selectedOptionNumber);
 
         if (action == CommonActions.Back)
         {
             return ConsoleState.PatronDetails;
+        }
+        else if (action == CommonActions.SearchBooks)
+        {
+            return await SearchBooks();
         }
         else if (action == CommonActions.Quit)
         {
@@ -188,74 +201,111 @@ public class ConsoleApp
 
     async Task<ConsoleState> SearchBooks()
     {
-        string? bookTitle = null;
-        while (string.IsNullOrWhiteSpace(bookTitle))
-        {
-            Console.Write("Enter a book title to search for: ");
-            bookTitle = Console.ReadLine();
-        }
+        string bookTitle = ReadBookTitle();
 
-        var (book, bookItem, loan) = await _jsonData.SearchBookByTitle(bookTitle);
+        // BookItemId와 BookId의 관계를 명확히 해야 합니다.
+        // 일반적으로 BookItem은 실제 책(복본)이고, Book은 도서 정보입니다.
+        // BookTitle로 Book을 찾고, Book.Id로 BookItem을 찾은 뒤, BookItem.Id로 Loan을 찾는 것이 일반적입니다.
 
+        // 1. Book 찾기
+        var book = _jsonData.Books?.FirstOrDefault(b => b.Title.Equals(bookTitle, StringComparison.OrdinalIgnoreCase));
         if (book == null)
         {
-            Console.WriteLine($"No book found with the title \"{bookTitle}\".");
+            Console.WriteLine($"No book found with title: {bookTitle}");
+            return ConsoleState.PatronDetails;
         }
-        else if (bookItem == null)
+
+        // 2. BookItem 찾기 (Book.Id와 연결)
+        var bookItem = _jsonData.BookItems?.FirstOrDefault(bi => bi.BookId == book.Id);
+        if (bookItem == null)
         {
             Console.WriteLine($"No physical copy found for \"{book.Title}\".");
+            return ConsoleState.PatronDetails;
         }
-        else if (loan == null)
+
+        // 3. Loan 찾기 (BookItemId와 ReturnDate == null)
+        var loan = _jsonData.Loans?.FirstOrDefault(l => l.BookItemId == bookItem.Id && l.ReturnDate == null);
+
+        // 4. 상태 평가 및 메시지 출력
+        if (loan == null)
         {
-            Console.WriteLine($"\"{book.Title}\" is available for loan");
+            Console.WriteLine($"{book.Title} is available for loan.");
         }
         else
         {
-            Console.WriteLine($"\"{book.Title}\" is on loan to another patron. The return due date is {loan.DueDate}");
+            Console.WriteLine($"{book.Title} is on loan to another patron. The return due date is {loan.DueDate}.");
         }
 
         return ConsoleState.PatronDetails;
     }
 
-    CommonActions ReadInputOptions(CommonActions options, out int selectedPatronNumber)
+    private string ReadBookTitle()
     {
-        selectedPatronNumber = 0;
-        Console.WriteLine("Select an action:");
-        foreach (CommonActions option in Enum.GetValues(typeof(CommonActions)))
-        {
-            if (options.HasFlag(option))
-            {
-                Console.WriteLine($"- {option}");
-            }
-        }
-
-        string? input = Console.ReadLine();
-        if (int.TryParse(input, out int result) && result >= 1 && result <= matchingPatrons.Count)
-        {
-            selectedPatronNumber = result;
-            return CommonActions.Select;
-        }
-
-        return CommonActions.None;
+        Console.Write("Enter book title: ");
+        return Console.ReadLine() ?? string.Empty;
     }
 
-    CommonActions ReadInputOptions(CommonActions options)
+
+    static void WriteInputOptions(CommonActions options)
     {
-        Console.WriteLine("Select an action:");
-        foreach (CommonActions option in Enum.GetValues(typeof(CommonActions)))
+        Console.WriteLine("Input Options:");
+        if (options.HasFlag(CommonActions.ReturnLoanedBook))
         {
-            if (options.HasFlag(option))
+            Console.WriteLine(" - \"r\" to mark as returned");
+        }
+        if (options.HasFlag(CommonActions.ExtendLoanedBook))
+        {
+            Console.WriteLine(" - \"e\" to extend the book loan");
+        }
+        if (options.HasFlag(CommonActions.RenewPatronMembership))
+        {
+            Console.WriteLine(" - \"m\" to extend patron's membership");
+        }
+        if (options.HasFlag(CommonActions.SearchPatrons))
+        {
+            Console.WriteLine(" - \"s\" for new search");
+        }
+        if (options.HasFlag(CommonActions.SearchBooks))
+        {
+            Console.WriteLine(" - \"b\" to check for book availability");
+        }
+        if (options.HasFlag(CommonActions.Quit))
+        {
+            Console.WriteLine(" - \"q\" to quit");
+        }
+        if (options.HasFlag(CommonActions.Select))
+        {
+            Console.WriteLine("Or type a number to select a list item.");
+        }
+    }
+
+    static CommonActions ReadInputOptions(CommonActions options, out int optionNumber)
+    {
+        CommonActions action;
+        optionNumber = 0;
+        do
+        {
+            Console.WriteLine();
+            WriteInputOptions(options);
+            string? userInput = Console.ReadLine();
+
+            action = userInput switch
             {
-                Console.WriteLine($"- {option}");
+                "q" when options.HasFlag(CommonActions.Quit) => CommonActions.Quit,
+                "s" when options.HasFlag(CommonActions.SearchPatrons) => CommonActions.SearchPatrons,
+                "m" when options.HasFlag(CommonActions.RenewPatronMembership) => CommonActions.RenewPatronMembership,
+                "e" when options.HasFlag(CommonActions.ExtendLoanedBook) => CommonActions.ExtendLoanedBook,
+                "r" when options.HasFlag(CommonActions.ReturnLoanedBook) => CommonActions.ReturnLoanedBook,
+                "b" when options.HasFlag(CommonActions.SearchBooks) => CommonActions.SearchBooks,
+                _ when int.TryParse(userInput, out optionNumber) => CommonActions.Select,
+                _ => CommonActions.Repeat
+            };
+
+            if (action == CommonActions.Repeat)
+            {
+                Console.WriteLine("Invalid input. Please try again.");
             }
-        }
-
-        string? input = Console.ReadLine();
-        if (Enum.TryParse(input, true, out CommonActions result) && options.HasFlag(result))
-        {
-            return result;
-        }
-
-        return CommonActions.None;
+        } while (action == CommonActions.Repeat);
+        return action;
     }
 }

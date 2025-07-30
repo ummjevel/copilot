@@ -52,4 +52,13 @@ public class JsonLoanRepository : ILoanRepository
             await _jsonData.LoadData();
         }
     }
+
+    public async Task<IEnumerable<object>> GetLoansByPatronId(int patronId)
+    {
+        await _jsonData.EnsureDataLoaded();
+        return _jsonData.Loans
+            .Where(l => l.PatronId == patronId)
+            .Cast<object>()
+            .ToList();
+    }
 }

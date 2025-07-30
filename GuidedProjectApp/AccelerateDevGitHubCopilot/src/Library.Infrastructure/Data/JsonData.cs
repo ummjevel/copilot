@@ -209,4 +209,20 @@ public class JsonData
         }
     }
 
+    public async Task<(Book? book, BookItem? bookItem, Loan? loan)> SearchBookByTitle(string bookTitle)
+    {
+        await EnsureDataLoaded();
+
+        var book = Books?.FirstOrDefault(b => b.Title.Equals(bookTitle, StringComparison.OrdinalIgnoreCase));
+        if (book == null)
+            return (null, null, null);
+
+        var bookItem = BookItems?.FirstOrDefault(bi => bi.BookId == book.Id);
+        if (bookItem == null)
+            return (book, null, null);
+
+        var loan = Loans?.FirstOrDefault(l => l.BookItemId == bookItem.Id && l.ReturnDate == null);
+
+        return (book, bookItem, loan);
+    }
 }
